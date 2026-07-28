@@ -16,9 +16,10 @@ swift build -c release
 
 APP=dist/Monnect.app
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Monnect "$APP/Contents/MacOS/Monnect"
 cp Info.plist "$APP/Contents/Info.plist"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 if [ "$SIGN_IDENTITY" = "-" ]; then
   codesign --force -s - "$APP"

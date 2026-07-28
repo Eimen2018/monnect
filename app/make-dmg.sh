@@ -26,6 +26,7 @@ cp -R dist/Monnect.app "$STAGING/Monnect.app"
 if command -v create-dmg >/dev/null; then
     create-dmg \
         --volname "Monnect $VERSION" \
+        --volicon Resources/AppIcon.icns \
         --window-size 660 400 \
         --icon-size 128 \
         --icon "Monnect.app" 165 200 \
