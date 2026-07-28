@@ -1,4 +1,8 @@
-# monnect
+<p align="center">
+  <img src="docs/icon.png" width="128" alt="Monnect icon">
+</p>
+
+<h1 align="center">monnect</h1>
 
 Switch a Magic Mouse and Magic Keyboard between two Macs with one click —
 no cable, no KVM, no Universal Control.
