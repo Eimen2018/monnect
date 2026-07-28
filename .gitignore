@@ -1,0 +1,7 @@
+.DS_Store
+# Personal machine config — never commit
+config.sh
+# Build artifacts
+app/.build/
+app/dist/
+*.log
