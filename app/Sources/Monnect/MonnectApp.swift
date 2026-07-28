@@ -20,8 +20,8 @@ struct MonnectApp: App {
         } else {
             statusSection
             Divider()
-            Button("Pull Input Here") { state.pullInputHere() }
-                .disabled(state.phase == .releasingPeer || isClaiming)
+            Button(state.allHere ? "Input Is Already Here" : "Pull Input Here") { state.pullInputHere() }
+                .disabled(state.phase == .releasingPeer || isClaiming || state.allHere)
             Text(state.peerVisible ? "Other Mac: online" : "Other Mac: not found")
         }
         Divider()
