@@ -50,10 +50,16 @@ other for the app to work.
 
 ## Install the menu bar app
 
-**Easiest:** download the notarized `Monnect-x.y.z.zip` from
-[Releases](https://github.com/Eimen2018/monnect/releases), unzip, and move
-`Monnect.app` to `~/Applications` on **each** Mac. It's signed and notarized,
-so it opens like any other app.
+**Easiest — Homebrew** (installs blueutil too), on **each** Mac:
+
+```bash
+brew install --cask eimen2018/tap/monnect
+```
+
+**Or** download the notarized DMG from
+[Releases](https://github.com/Eimen2018/monnect/releases) and drag
+`Monnect.app` to Applications. It's signed and notarized, so it opens like
+any other app.
 
 **Or build from source** on each Mac:
 
