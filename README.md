@@ -50,7 +50,12 @@ other for the app to work.
 
 ## Install the menu bar app
 
-On **each** Mac:
+**Easiest:** download the notarized `Monnect-x.y.z.zip` from
+[Releases](https://github.com/Eimen2018/monnect/releases), unzip, and move
+`Monnect.app` to `~/Applications` on **each** Mac. It's signed and notarized,
+so it opens like any other app.
+
+**Or build from source** on each Mac:
 
 ```bash
 git clone https://github.com/Eimen2018/monnect && cd monnect
@@ -72,9 +77,9 @@ Finally, on both Macs: `open ~/Applications/Monnect.app`, approve the
 **Bluetooth**, **local network**, and **firewall** prompts, and add Monnect
 to **System Settings → General → Login Items**.
 
-> **Gatekeeper note:** the app is ad-hoc signed when you build it yourself,
-> so there is nothing to bypass. If you received a prebuilt copy instead,
-> right-click → Open the first time.
+> Release builds are signed with a Developer ID and notarized by Apple.
+> Self-built copies are ad-hoc signed, which is fine on the Mac that built
+> them.
 
 ### Daily use
 
