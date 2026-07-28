@@ -3,6 +3,12 @@
 Switch a Magic Mouse and Magic Keyboard between two Macs with one click —
 no cable, no KVM, no Universal Control.
 
+<p align="center">
+  <img src="docs/menu-away.png" width="300" alt="Monnect menu on the Mac without the peripherals: Pull Input Here is enabled">
+  &nbsp;&nbsp;
+  <img src="docs/menu-here.png" width="250" alt="Monnect menu on the Mac that has the peripherals: devices are here">
+</p>
+
 Apple's Magic peripherals can only be paired with **one** host at a time.
 If you use the same mouse and keyboard with two Macs (say, a personal and a
 work MacBook), the usual "fix" is plugging in a cable every time you switch,
