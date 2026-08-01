@@ -125,8 +125,11 @@ binary — granting `/usr/sbin/sshd` alone is not enough on recent macOS).
   interrupted, rerun it — rerunning is always safe. Worst case, one cable
   plug-in restores the status quo.
 - Both Macs must be awake and on the same network for the handoff message.
-  If the other Mac is unreachable, the claim still runs (useful when it
-  already released, e.g. it's shut down and you released beforehand).
+  If the other Mac is unreachable, the claim still runs. To make the
+  laptop-in-a-bag case work, a Mac automatically releases the peripherals
+  when it **sleeps with the lid closed** — a sleeping Mac would otherwise
+  win reconnect races via wake-on-Bluetooth (set `releaseOnLidClose: false`
+  in the config to disable).
 - Two Macs per token. More than two would need a smarter "who has them"
   protocol than this app carries.
 
