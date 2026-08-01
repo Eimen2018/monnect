@@ -34,6 +34,17 @@ final class AppState: ObservableObject {
         peer.startBrowsing()
         self.peer = peer
 
+        // When this Mac sleeps because the lid was closed, give up the
+        // peripherals: a closed MacBook can't use them, but its Bluetooth
+        // still answers their reconnect pages from sleep, which makes the
+        // other Mac's claim a coin toss. Releasing on clamshell sleep makes
+        // the handoff deterministic. Idle sleep (lid open) is left alone.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.releaseOnClamshellSleep() }
+        }
+
         refreshStates()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -68,6 +79,30 @@ final class AppState: ObservableObject {
             let snapshot = result
             await MainActor.run { self?.connected = snapshot }
         }
+    }
+
+    private func releaseOnClamshellSleep() {
+        guard let config, config.releaseOnLidClose ?? true else { return }
+        let devices = config.devices
+        Task.detached {
+            guard Self.isLidClosed() else { return }
+            let held = devices.filter { BluetoothEngine.shared.isConnected($0.address) }
+            guard !held.isEmpty else { return }
+            BluetoothEngine.shared.releaseAll(held)
+            NSLog("monnect: released \(held.count) device(s) on lid-close sleep")
+        }
+    }
+
+    nonisolated private static func isLidClosed() -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/sbin/ioreg")
+        p.arguments = ["-r", "-k", "AppleClamshellState", "-d", "4"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        do { try p.run() } catch { return false }
+        p.waitUntilExit()
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return out.contains("\"AppleClamshellState\" = Yes")
     }
 
     func pullInputHere() {
