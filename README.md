@@ -120,7 +120,9 @@ binary — granting `/usr/sbin/sshd` alone is not enough on recent macOS).
 
 - **The wake-up nudge is part of the ritual.** The device firmware only
   listens while awake; no software on the Mac side can remove that. Wiggle /
-  tap usually suffices; power-cycle always works.
+  tap usually suffices; power-cycle always works. Devices that sleep through
+  a switch aren't stranded — the app keeps watching and pairs them whenever
+  they wake up.
 - Mid-switch, the devices are paired to **neither** Mac. If a switch is
   interrupted, rerun it — rerunning is always safe. Worst case, one cable
   plug-in restores the status quo.
