@@ -8,6 +8,13 @@ final class BluetoothEngine {
     private let queue = DispatchQueue(label: "monnect.blueutil")
     let blueutilPath: String?
 
+    // Lets a release request (the other Mac pulling) interrupt an in-flight
+    // claim loop instead of waiting behind it on the serial queue.
+    private let abortLock = NSLock()
+    private var abortClaim = false
+    private func setAbort(_ v: Bool) { abortLock.lock(); abortClaim = v; abortLock.unlock() }
+    private func shouldAbort() -> Bool { abortLock.lock(); defer { abortLock.unlock() }; return abortClaim }
+
     private init() {
         let candidates = ["/opt/homebrew/bin/blueutil", "/usr/local/bin/blueutil"]
         blueutilPath = candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
@@ -60,6 +67,7 @@ final class BluetoothEngine {
 
     /// Old-owner side of a switch: unpair so another Mac can claim.
     func releaseAll(_ devices: [DeviceConfig]) {
+        setAbort(true)
         queue.sync {
             for d in devices {
                 run(["--unpair", d.address])
@@ -75,6 +83,7 @@ final class BluetoothEngine {
                   windowSeconds: TimeInterval = 90,
                   progress: @escaping (String) -> Void) -> [DeviceConfig] {
         queue.sync {
+            setAbort(false)
             var pending = devices.filter { d in
                 let r = run(["--is-connected", d.address])
                 return r.output.trimmingCharacters(in: .whitespacesAndNewlines) != "1"
@@ -83,7 +92,7 @@ final class BluetoothEngine {
                 run(["--unpair", d.address])
             }
             let deadline = Date().addingTimeInterval(windowSeconds)
-            while !pending.isEmpty && Date() < deadline {
+            while !pending.isEmpty && Date() < deadline && !shouldAbort() {
                 for d in pending {
                     run(["--pair", d.address])
                     if run(["--is-connected", d.address]).output

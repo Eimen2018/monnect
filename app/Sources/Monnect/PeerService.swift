@@ -68,6 +68,15 @@ final class PeerService {
                 }
             case "ping":
                 self.reply(connection, PeerReply(ok: true, error: nil))
+            case "holding":
+                // Which of the configured devices are connected HERE. Used
+                // by a waking peer to decide whether to reclaim.
+                DispatchQueue.global().async {
+                    let held = self.devicesProvider()
+                        .filter { BluetoothEngine.shared.isConnected($0.address) }
+                        .map(\.address)
+                    self.reply(connection, PeerReply(ok: true, error: nil, holding: held))
+                }
             default:
                 self.reply(connection, PeerReply(ok: false, error: "unknown cmd"))
             }
@@ -107,6 +116,41 @@ final class PeerService {
             }
         }
         return nil
+    }
+
+    /// Ask the other Mac which configured devices it currently holds.
+    /// Completion receives the addresses, or nil if the peer is unreachable.
+    func queryHolding(timeout: TimeInterval = 6, completion: @escaping ([String]?) -> Void) {
+        guard let endpoint = firstPeerEndpoint() else {
+            completion(nil)
+            return
+        }
+        let conn = NWConnection(to: endpoint, using: .tcp)
+        var finished = false
+        let finish: ([String]?) -> Void = { held in
+            guard !finished else { return }
+            finished = true
+            conn.cancel()
+            completion(held)
+        }
+        queue.asyncAfter(deadline: .now() + timeout) { finish(nil) }
+        conn.stateUpdateHandler = { state in
+            if case .failed = state { finish(nil) }
+        }
+        conn.start(queue: queue)
+        let msg = PeerMessage(cmd: "holding", token: token)
+        conn.send(content: try? JSONEncoder().encode(msg), completion: .contentProcessed { err in
+            if err != nil { finish(nil); return }
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, _ in
+                guard let data,
+                      let reply = try? JSONDecoder().decode(PeerReply.self, from: data),
+                      reply.ok else {
+                    finish(nil)
+                    return
+                }
+                finish(reply.holding ?? [])
+            }
+        })
     }
 
     /// Ask the other Mac to unpair the peripherals. Completion receives an
@@ -152,4 +196,5 @@ struct PeerMessage: Codable {
 struct PeerReply: Codable {
     let ok: Bool
     let error: String?
+    var holding: [String]? = nil
 }

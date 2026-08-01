@@ -44,6 +44,14 @@ final class AppState: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in self?.releaseOnClamshellSleep() }
         }
+        // The other half of lid-close release: on wake, if the other Mac
+        // didn't take the devices while we slept, reclaim them automatically
+        // so reopening the lid never requires a manual pull.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.reclaimAfterWakeIfUnclaimed() }
+        }
 
         refreshStates()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -81,15 +89,60 @@ final class AppState: ObservableObject {
         }
     }
 
+    private var releasedOnSleep = false
+
     private func releaseOnClamshellSleep() {
         guard let config, config.releaseOnLidClose ?? true else { return }
         let devices = config.devices
-        Task.detached {
+        Task.detached { [weak self] in
             guard Self.isLidClosed() else { return }
             let held = devices.filter { BluetoothEngine.shared.isConnected($0.address) }
             guard !held.isEmpty else { return }
             BluetoothEngine.shared.releaseAll(held)
             NSLog("monnect: released \(held.count) device(s) on lid-close sleep")
+            await MainActor.run { self?.releasedOnSleep = true }
+        }
+    }
+
+    private func reclaimAfterWakeIfUnclaimed() {
+        guard releasedOnSleep else { return }
+        releasedOnSleep = false
+        guard let config, let peer else { return }
+        phase = .claiming("Woke up — checking where the devices are…")
+        // Give Wi-Fi and Bonjour a moment to come back before asking around.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self else { return }
+            peer.queryHolding { held in
+                Task { @MainActor in
+                    let ours = Set(config.devices.map(\.address))
+                    if let held, !ours.isDisjoint(with: Set(held)) {
+                        // The other Mac took them while we slept — theirs now.
+                        self.phase = .idle
+                        self.refreshStates()
+                        return
+                    }
+                    self.phase = .claiming("Reclaiming — wiggle the mouse / tap a key")
+                    self.runClaim(config: config)
+                }
+            }
+        }
+    }
+
+    /// Shared claim tail used by pull and wake-reclaim.
+    private func runClaim(config: Config) {
+        Task.detached {
+            let failed = BluetoothEngine.shared.claimAll(config.devices) { note in
+                Task { @MainActor in self.phase = .claiming(note) }
+            }
+            await MainActor.run {
+                if failed.isEmpty {
+                    self.phase = .idle
+                } else {
+                    let names = failed.map(\.name).joined(separator: ", ")
+                    self.phase = .error("Couldn't claim: \(names). Power-cycle and retry.")
+                }
+                self.refreshStates()
+            }
         }
     }
 
@@ -115,20 +168,7 @@ final class AppState: ObservableObject {
                 // may already be free.
                 if let err { NSLog("monnect: release failed: \(err)") }
                 self.phase = .claiming("Power-cycle each device now (off, 3s, on)")
-                Task.detached {
-                    let failed = BluetoothEngine.shared.claimAll(config.devices) { note in
-                        Task { @MainActor in self.phase = .claiming(note) }
-                    }
-                    await MainActor.run {
-                        if failed.isEmpty {
-                            self.phase = .idle
-                        } else {
-                            let names = failed.map(\.name).joined(separator: ", ")
-                            self.phase = .error("Couldn't claim: \(names). Power-cycle and retry.")
-                        }
-                        self.refreshStates()
-                    }
-                }
+                self.runClaim(config: config)
             }
         }
     }
