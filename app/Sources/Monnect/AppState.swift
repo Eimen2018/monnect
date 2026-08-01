@@ -128,8 +128,13 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Shared claim tail used by pull and wake-reclaim.
+    private var watcherTask: Task<Void, Never>?
+
+    /// Shared claim tail used by pull and wake-reclaim. Devices that miss
+    /// the 90 s window aren't abandoned — a background watcher keeps trying
+    /// so they join whenever they finally wake up.
     private func runClaim(config: Config) {
+        watcherTask?.cancel()
         Task.detached {
             let failed = BluetoothEngine.shared.claimAll(config.devices) { note in
                 Task { @MainActor in self.phase = .claiming(note) }
@@ -139,8 +144,46 @@ final class AppState: ObservableObject {
                     self.phase = .idle
                 } else {
                     let names = failed.map(\.name).joined(separator: ", ")
-                    self.phase = .error("Couldn't claim: \(names). Power-cycle and retry.")
+                    self.phase = .error("Waiting for \(names) — power-cycle it and it will join automatically")
+                    self.startWatcher(for: failed, config: config)
                 }
+                self.refreshStates()
+            }
+        }
+    }
+
+    /// Patiently retries pairing the given devices every few seconds,
+    /// forever, until they connect here or the other Mac takes them.
+    private func startWatcher(for devices: [DeviceConfig], config: Config) {
+        watcherTask?.cancel()
+        let peer = self.peer
+        watcherTask = Task.detached { [weak self] in
+            var remaining = devices
+            var peerTookThem = false
+            while !Task.isCancelled && !remaining.isEmpty {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                if Task.isCancelled { return }
+                if let peer {
+                    let held: [String]? = await withCheckedContinuation { cont in
+                        peer.queryHolding { cont.resume(returning: $0) }
+                    }
+                    if let held, remaining.contains(where: { held.contains($0.address) }) {
+                        peerTookThem = true
+                        break
+                    }
+                }
+                for d in remaining {
+                    if Task.isCancelled { return }
+                    if BluetoothEngine.shared.attemptClaim(d) {
+                        remaining.removeAll { $0.address == d.address }
+                        await MainActor.run { self?.refreshStates() }
+                    }
+                }
+            }
+            let settled = remaining.isEmpty || peerTookThem
+            await MainActor.run {
+                guard let self else { return }
+                if settled { self.phase = .idle }
                 self.refreshStates()
             }
         }
@@ -160,6 +203,7 @@ final class AppState: ObservableObject {
 
     func pullInputHere() {
         guard let config, let peer, phase == .idle || isErrorPhase else { return }
+        watcherTask?.cancel()
         phase = .releasingPeer
         peer.sendRelease { [weak self] err in
             Task { @MainActor in

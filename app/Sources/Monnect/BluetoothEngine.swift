@@ -65,6 +65,20 @@ final class BluetoothEngine {
         }
     }
 
+    /// One quiet pair+connect attempt, used by the background watcher after
+    /// a claim window expires. Returns true when the device is connected.
+    func attemptClaim(_ d: DeviceConfig) -> Bool {
+        queue.sync {
+            run(["--pair", d.address])
+            if run(["--is-connected", d.address]).output
+                .trimmingCharacters(in: .whitespacesAndNewlines) != "1" {
+                run(["--connect", d.address])
+            }
+            return run(["--is-connected", d.address]).output
+                .trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+        }
+    }
+
     /// Old-owner side of a switch: unpair so another Mac can claim.
     func releaseAll(_ devices: [DeviceConfig]) {
         setAbort(true)
