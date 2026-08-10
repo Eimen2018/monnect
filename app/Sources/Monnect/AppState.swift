@@ -50,7 +50,12 @@ final class AppState: ObservableObject {
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.reclaimAfterWakeIfUnclaimed() }
+            Task { @MainActor in
+                // Bonjour browsers go quietly stale across sleep/network
+                // transitions; restart discovery on every wake.
+                self?.peer?.refreshBrowsing()
+                self?.reclaimAfterWakeIfUnclaimed()
+            }
         }
 
         refreshStates()

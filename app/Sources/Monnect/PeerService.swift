@@ -40,10 +40,22 @@ final class PeerService {
             listener.newConnectionHandler = { [weak self] conn in
                 self?.handle(connection: conn)
             }
+            listener.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case .failed(let err):
+                    DiagLog.log("EVENT listener failed (\(err)) — restarting in 3s")
+                    self?.queue.asyncAfter(deadline: .now() + 3) { self?.startListening() }
+                case .ready:
+                    DiagLog.log("EVENT listener ready")
+                default:
+                    break
+                }
+            }
             listener.start(queue: queue)
             self.listener = listener
         } catch {
-            NSLog("monnect: failed to start listener: \(error)")
+            DiagLog.log("EVENT listener start error: \(error) — retrying in 5s")
+            queue.asyncAfter(deadline: .now() + 5) { [weak self] in self?.startListening() }
         }
     }
 
@@ -94,19 +106,42 @@ final class PeerService {
     // MARK: - Client side
 
     func startBrowsing() {
+        browser?.cancel()
         let browser = NWBrowser(for: .bonjour(type: Self.serviceType, domain: nil), using: .tcp)
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             guard let self else { return }
-            self.peerNames = results.compactMap { result in
+            let names = results.compactMap { result in
                 if case let .service(name, _, _, _) = result.endpoint, !self.isSelf(name) {
                     return name
                 }
                 return nil
             }
-            self.onPeersChanged?(self.peerNames)
+            if names != self.peerNames {
+                DiagLog.log("EVENT peers changed: [\(names.joined(separator: ", "))]")
+            }
+            self.peerNames = names
+            self.onPeersChanged?(names)
+        }
+        browser.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .failed(let err):
+                DiagLog.log("EVENT browser failed (\(err)) — restarting in 3s")
+                self?.queue.asyncAfter(deadline: .now() + 3) { self?.startBrowsing() }
+            case .ready:
+                DiagLog.log("EVENT browser ready")
+            default:
+                break
+            }
         }
         browser.start(queue: queue)
         self.browser = browser
+    }
+
+    /// Restart discovery from scratch — called on wake, when a stale browser
+    /// may sit silently empty after network transitions.
+    func refreshBrowsing() {
+        DiagLog.log("EVENT browser refresh requested")
+        startBrowsing()
     }
 
     private func firstPeerEndpoint() -> NWEndpoint? {
