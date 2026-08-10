@@ -23,6 +23,38 @@ final class PeerService {
     private(set) var peerNames: [String] = []
     var onPeersChanged: (([String]) -> Void)?
 
+    // Direct-endpoint fallback for one-way-Bonjour networks: learned from
+    // any authenticated inbound message, kept fresh by heartbeats.
+    private var ownListenPort: UInt16?
+    private var learnedEndpoint: NWEndpoint?
+    private var learnedAt: Date = .distantPast
+    private let learnedTTL: TimeInterval = 600
+
+    private func learnedEndpointIfFresh() -> NWEndpoint? {
+        Date().timeIntervalSince(learnedAt) < learnedTTL ? learnedEndpoint : nil
+    }
+
+    private func recordSender(of connection: NWConnection, port: UInt16?) {
+        guard let port, let nwPort = NWEndpoint.Port(rawValue: port),
+              case let .hostPort(host, _) = connection.endpoint else { return }
+        let endpoint = NWEndpoint.hostPort(host: host, port: nwPort)
+        let wasStale = Date().timeIntervalSince(learnedAt) > 120
+        learnedEndpoint = endpoint
+        learnedAt = Date()
+        if wasStale {
+            DiagLog.log("EVENT learned peer fallback endpoint \(endpoint)")
+            notifyVisibility()
+        }
+    }
+
+    private func notifyVisibility() {
+        var names = peerNames
+        if names.isEmpty, let ep = learnedEndpointIfFresh() {
+            names = ["\(ep)"]
+        }
+        onPeersChanged?(names)
+    }
+
     init(token: String, devicesProvider: @escaping () -> [DeviceConfig]) {
         self.token = token
         self.devicesProvider = devicesProvider
@@ -46,7 +78,8 @@ final class PeerService {
                     DiagLog.log("EVENT listener failed (\(err)) — restarting in 3s")
                     self?.queue.asyncAfter(deadline: .now() + 3) { self?.startListening() }
                 case .ready:
-                    DiagLog.log("EVENT listener ready")
+                    self?.ownListenPort = listener.port?.rawValue
+                    DiagLog.log("EVENT listener ready on port \(listener.port?.rawValue ?? 0)")
                 default:
                     break
                 }
@@ -71,6 +104,7 @@ final class PeerService {
                 self.reply(connection, PeerReply(ok: false, error: "bad token"))
                 return
             }
+            self.recordSender(of: connection, port: msg.listenPort)
             switch msg.cmd {
             case "release":
                 DiagLog.log("EVENT peer requested release")
@@ -120,7 +154,7 @@ final class PeerService {
                 DiagLog.log("EVENT peers changed: [\(names.joined(separator: ", "))]")
             }
             self.peerNames = names
-            self.onPeersChanged?(names)
+            self.notifyVisibility()
         }
         browser.stateUpdateHandler = { [weak self] state in
             switch state {
@@ -145,13 +179,39 @@ final class PeerService {
     }
 
     private func firstPeerEndpoint() -> NWEndpoint? {
-        guard let browser else { return nil }
-        for result in browser.browseResults {
-            if case let .service(name, _, _, _) = result.endpoint, !isSelf(name) {
-                return result.endpoint
+        if let browser {
+            for result in browser.browseResults {
+                if case let .service(name, _, _, _) = result.endpoint, !isSelf(name) {
+                    return result.endpoint
+                }
             }
         }
-        return nil
+        // Bonjour came up empty — fall back to the last endpoint that
+        // successfully talked to us.
+        return learnedEndpointIfFresh()
+    }
+
+    /// Periodically ping whatever endpoint we know. This keeps the OTHER
+    /// side's learned-endpoint fallback fresh, so discovery survives
+    /// networks where multicast only flows one way.
+    func startHeartbeat() {
+        queue.asyncAfter(deadline: .now() + 30) { [weak self] in
+            self?.sendPing()
+            self?.startHeartbeat()
+        }
+    }
+
+    private func sendPing() {
+        guard let endpoint = firstPeerEndpoint() else { return }
+        let conn = NWConnection(to: endpoint, using: .tcp)
+        conn.start(queue: queue)
+        let msg = PeerMessage(cmd: "ping", token: token, listenPort: ownListenPort)
+        conn.send(content: try? JSONEncoder().encode(msg), completion: .contentProcessed { _ in
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { _, _, _, _ in
+                conn.cancel()
+            }
+        })
+        queue.asyncAfter(deadline: .now() + 10) { conn.cancel() }
     }
 
     /// Ask the other Mac which configured devices it currently holds.
@@ -174,7 +234,7 @@ final class PeerService {
             if case .failed = state { finish(nil) }
         }
         conn.start(queue: queue)
-        let msg = PeerMessage(cmd: "holding", token: token)
+        let msg = PeerMessage(cmd: "holding", token: token, listenPort: ownListenPort)
         conn.send(content: try? JSONEncoder().encode(msg), completion: .contentProcessed { err in
             if err != nil { finish(nil); return }
             conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, _ in
@@ -209,7 +269,7 @@ final class PeerService {
             if case let .failed(err) = state { finish(err.localizedDescription) }
         }
         conn.start(queue: queue)
-        let msg = PeerMessage(cmd: "release", token: token)
+        let msg = PeerMessage(cmd: "release", token: token, listenPort: ownListenPort)
         conn.send(content: try? JSONEncoder().encode(msg), completion: .contentProcessed { err in
             if let err { finish(err.localizedDescription); return }
             conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, _ in
@@ -227,6 +287,9 @@ final class PeerService {
 struct PeerMessage: Codable {
     let cmd: String
     let token: String
+    /// The sender's own listener port. Lets the receiver learn a direct
+    /// ip:port fallback for networks where Bonjour only works one way.
+    var listenPort: UInt16? = nil
 }
 
 struct PeerReply: Codable {

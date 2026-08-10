@@ -32,6 +32,7 @@ final class AppState: ObservableObject {
         }
         peer.startListening()
         peer.startBrowsing()
+        peer.startHeartbeat()
         self.peer = peer
 
         // When this Mac sleeps because the lid was closed, give up the
