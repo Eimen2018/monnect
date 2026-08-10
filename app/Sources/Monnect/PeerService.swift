@@ -61,6 +61,7 @@ final class PeerService {
             }
             switch msg.cmd {
             case "release":
+                DiagLog.log("EVENT peer requested release")
                 // Blocking Bluetooth work off the network queue.
                 DispatchQueue.global().async {
                     BluetoothEngine.shared.releaseAll(self.devicesProvider())

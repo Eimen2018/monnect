@@ -29,6 +29,7 @@ final class BluetoothEngine {
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = pipe
+        let started = Date()
         do {
             try p.run()
         } catch {
@@ -36,7 +37,15 @@ final class BluetoothEngine {
         }
         p.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return (p.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+        let output = String(data: data, encoding: .utf8) ?? ""
+        let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
+        // --paired dumps the whole device list and --is-connected is called
+        // constantly by the poller; logging those is noise.
+        if args.first != "--is-connected" && args.first != "--paired" {
+            let summary = output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160)
+            DiagLog.log("blueutil \(args.joined(separator: " ")) -> exit \(p.terminationStatus) in \(elapsed)\(summary.isEmpty ? "" : " | \(summary)")")
+        }
+        return (p.terminationStatus, output)
     }
 
     struct PairedDevice: Codable {
@@ -81,6 +90,7 @@ final class BluetoothEngine {
 
     /// Old-owner side of a switch: unpair so another Mac can claim.
     func releaseAll(_ devices: [DeviceConfig]) {
+        DiagLog.log("EVENT releaseAll: \(devices.map(\.name).joined(separator: ", "))")
         setAbort(true)
         queue.sync {
             for d in devices {
@@ -102,6 +112,7 @@ final class BluetoothEngine {
                 let r = run(["--is-connected", d.address])
                 return r.output.trimmingCharacters(in: .whitespacesAndNewlines) != "1"
             }
+            DiagLog.log("EVENT claimAll start: pending=[\(pending.map(\.name).joined(separator: ", "))] window=\(Int(windowSeconds))s")
             for d in pending {
                 run(["--unpair", d.address])
             }
@@ -121,6 +132,7 @@ final class BluetoothEngine {
                 }
                 if !pending.isEmpty { Thread.sleep(forTimeInterval: 1) }
             }
+            DiagLog.log("EVENT claimAll end: unclaimed=[\(pending.map(\.name).joined(separator: ", "))] aborted=\(shouldAbort())")
             return pending
         }
     }

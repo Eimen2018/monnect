@@ -95,16 +95,18 @@ final class AppState: ObservableObject {
         guard let config, config.releaseOnLidClose ?? true else { return }
         let devices = config.devices
         Task.detached { [weak self] in
-            guard Self.isLidClosed() else { return }
+            let lidClosed = Self.isLidClosed()
+            DiagLog.log("EVENT willSleep: lidClosed=\(lidClosed)")
+            guard lidClosed else { return }
             let held = devices.filter { BluetoothEngine.shared.isConnected($0.address) }
             guard !held.isEmpty else { return }
             BluetoothEngine.shared.releaseAll(held)
-            NSLog("monnect: released \(held.count) device(s) on lid-close sleep")
             await MainActor.run { self?.releasedOnSleep = true }
         }
     }
 
     private func reclaimAfterWakeIfUnclaimed() {
+        DiagLog.log("EVENT didWake: releasedOnSleep=\(releasedOnSleep)")
         guard releasedOnSleep else { return }
         releasedOnSleep = false
         guard let config, let peer else { return }
@@ -114,6 +116,7 @@ final class AppState: ObservableObject {
             guard let self else { return }
             peer.queryHolding { held in
                 Task { @MainActor in
+                    DiagLog.log("EVENT wake reclaim: peer holds \(held.map { "\($0)" } ?? "unreachable")")
                     let ours = Set(config.devices.map(\.address))
                     if let held, !ours.isDisjoint(with: Set(held)) {
                         // The other Mac took them while we slept — theirs now.
@@ -175,6 +178,7 @@ final class AppState: ObservableObject {
                 for d in remaining {
                     if Task.isCancelled { return }
                     if BluetoothEngine.shared.attemptClaim(d) {
+                        DiagLog.log("EVENT watcher claimed \(d.name)")
                         remaining.removeAll { $0.address == d.address }
                         await MainActor.run { self?.refreshStates() }
                     }
@@ -203,6 +207,7 @@ final class AppState: ObservableObject {
 
     func pullInputHere() {
         guard let config, let peer, phase == .idle || isErrorPhase else { return }
+        DiagLog.log("EVENT pull initiated by user")
         watcherTask?.cancel()
         phase = .releasingPeer
         peer.sendRelease { [weak self] err in
