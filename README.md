@@ -143,7 +143,10 @@ binary — granting `/usr/sbin/sshd` alone is not enough on recent macOS).
 - Someone on your network who captures the token could unpair your
   peripherals (annoyance, not access). Don't run it on networks you don't
   trust; rotate the token by re-running `Monnect init` on both Macs.
-- The app makes no network connections beyond your LAN and collects nothing.
+- The app makes no network connections beyond your LAN and collects nothing,
+  with one exception: a daily version check against GitHub Releases (an
+  anonymous HTTPS request; disable with `checkForUpdates: false` in the
+  config).
 
 ## Troubleshooting
 

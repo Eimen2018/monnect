@@ -13,6 +13,9 @@ struct Config: Codable {
     /// other Mac can claim without a race against wake-on-Bluetooth.
     /// Defaults to true when absent.
     var releaseOnLidClose: Bool?
+    /// Daily check against GitHub Releases for a newer version.
+    /// Defaults to true when absent.
+    var checkForUpdates: Bool?
 
     static var fileURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

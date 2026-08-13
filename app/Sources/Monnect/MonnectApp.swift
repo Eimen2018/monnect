@@ -25,6 +25,12 @@ struct MonnectApp: App {
             Text(state.peerVisible ? "Other Mac: online" : "Other Mac: not found")
         }
         Divider()
+        if let update = state.updateAvailable {
+            Button("Update available: v\(update.version)…") {
+                NSWorkspace.shared.open(update.url)
+            }
+        }
+        Text("Monnect v\(UpdateChecker.currentVersion)")
         Button("Quit Monnect") { NSApplication.shared.terminate(nil) }
     }
 

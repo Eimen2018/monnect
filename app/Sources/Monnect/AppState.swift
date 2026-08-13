@@ -15,6 +15,7 @@ final class AppState: ObservableObject {
     @Published var peerVisible = false
     @Published var configMissing = false
     @Published var blueutilMissing = false
+    @Published var updateAvailable: LatestRelease?
 
     let config: Config?
     private(set) var peer: PeerService?
@@ -59,6 +60,11 @@ final class AppState: ObservableObject {
             }
         }
 
+        checkForUpdates()
+        Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkForUpdates() }
+        }
+
         refreshStates()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -92,6 +98,20 @@ final class AppState: ObservableObject {
             }
             let snapshot = result
             await MainActor.run { self?.connected = snapshot }
+        }
+    }
+
+    private func checkForUpdates() {
+        guard config?.checkForUpdates ?? true else { return }
+        UpdateChecker.fetchLatest { [weak self] latest in
+            Task { @MainActor in
+                guard let self, let latest,
+                      UpdateChecker.isNewer(latest.version, than: UpdateChecker.currentVersion) else { return }
+                if self.updateAvailable != latest {
+                    DiagLog.log("EVENT update available: v\(latest.version) (running v\(UpdateChecker.currentVersion))")
+                }
+                self.updateAvailable = latest
+            }
         }
     }
 
