@@ -8,6 +8,14 @@ if let cmd = cliArgs.first {
     if cmd == "init" {
         exit(InitCommand.run(args: Array(cliArgs.dropFirst())))
     }
+    // pair/join run before the config guard: join is how a Mac WITHOUT a
+    // config gets one, and pair prints its own friendlier error.
+    if cmd == "pair" {
+        exit(PairCommand.runHost())
+    }
+    if cmd == "join" {
+        exit(PairCommand.runJoin(args: Array(cliArgs.dropFirst())))
+    }
     guard let config = Config.load() else {
         FileHandle.standardError.write(
             "no config at \(Config.fileURL.path) — run `Monnect init` first\n".data(using: .utf8)!)
@@ -55,7 +63,7 @@ if let cmd = cliArgs.first {
         exit(1)
 
     default:
-        print("usage: Monnect [init|pull|release|status]")
+        print("usage: Monnect [init|pair|join|pull|release|status]")
         exit(64)
     }
 }

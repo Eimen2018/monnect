@@ -79,9 +79,12 @@ Then run setup on the **first** Mac:
 ~/Applications/Monnect.app/Contents/MacOS/Monnect init
 ```
 
-It lists your paired devices, lets you pick the ones to switch, and prints
-the exact `Monnect init --token …` command to run on the second Mac (the
-shared token is how the two instances trust each other).
+It lists your paired devices and lets you pick the ones to switch. Then
+connect the **second** Mac with a six-digit code: run `Monnect pair` on the
+first Mac, `Monnect join` on the second, and type the code it shows. The
+code is single-use and valid for two minutes; the shared token and device
+list travel encrypted. (The old way still works: `init` also prints a
+`Monnect init --token …` command you can run on the second Mac by hand.)
 
 Finally, on both Macs: `open ~/Applications/Monnect.app`, approve the
 **Bluetooth**, **local network**, and **firewall** prompts, and add Monnect
@@ -129,9 +132,11 @@ binary — granting `/usr/sbin/sshd` alone is not enough on recent macOS).
 - Both Macs must be awake and on the same network for the handoff message.
   If the other Mac is unreachable, the claim still runs. To make the
   laptop-in-a-bag case work, a Mac automatically releases the peripherals
-  when it **sleeps with the lid closed** — a sleeping Mac would otherwise
-  win reconnect races via wake-on-Bluetooth (set `releaseOnLidClose: false`
-  in the config to disable).
+  when it **sleeps with the lid closed while the other Mac is visible on
+  the network** — a sleeping Mac would otherwise win reconnect races via
+  wake-on-Bluetooth. With no peer around the pairing is kept, so reopening
+  the lid reconnects on the first key tap, no power-cycle needed (set
+  `releaseOnLidClose: false` in the config to never release on lid close).
 - Two Macs per token. More than two would need a smarter "who has them"
   protocol than this app carries.
 
@@ -142,7 +147,14 @@ binary — granting `/usr/sbin/sshd` alone is not enough on recent macOS).
   `~/Library/Application Support/Monnect/config.json` on both Macs.
 - Someone on your network who captures the token could unpair your
   peripherals (annoyance, not access). Don't run it on networks you don't
-  trust; rotate the token by re-running `Monnect init` on both Macs.
+  trust; rotate the token by re-running `Monnect init` on one Mac and
+  `Monnect pair` / `Monnect join` to carry it to the other.
+- Code pairing (`pair`/`join`) encrypts the token under an X25519 key
+  agreement mixed with the six-digit code (HKDF + AES-GCM). It is not a
+  full PAKE: an active man-in-the-middle on your LAN during the two-minute
+  window could brute-force the code offline. One confirm attempt per code,
+  then the host quits. If that's too spicy for your network, copy the
+  token by hand instead.
 - The app makes no network connections beyond your LAN and collects nothing,
   with one exception: a daily version check against GitHub Releases (an
   anonymous HTTPS request; disable with `checkForUpdates: false` in the

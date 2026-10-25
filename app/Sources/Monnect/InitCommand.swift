@@ -81,7 +81,10 @@ enum InitCommand {
         Wrote \(url.path)
 
         Next steps:
-          1. On your OTHER Mac, install Monnect and run:
+          1. On your OTHER Mac, install Monnect, then EITHER run
+               Monnect pair
+             here and `Monnect join` there and enter the six-digit code,
+             OR run there:
                Monnect init --token \(token)
              (same token = the two Macs trust each other)
           2. Launch Monnect.app on both Macs and allow the Bluetooth,
