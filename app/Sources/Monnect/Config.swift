@@ -9,8 +9,10 @@ struct DeviceConfig: Codable, Identifiable, Equatable {
 struct Config: Codable {
     var token: String
     var devices: [DeviceConfig]
-    /// Unpair automatically when this Mac sleeps with the lid closed, so the
-    /// other Mac can claim without a race against wake-on-Bluetooth.
+    /// Unpair automatically when this Mac sleeps with the lid closed while
+    /// the other Mac is visible on the network, so it can claim without a
+    /// race against wake-on-Bluetooth. With no peer around the pairing is
+    /// kept, so reopening the lid reconnects without a power-cycle.
     /// Defaults to true when absent.
     var releaseOnLidClose: Bool?
     /// Daily check against GitHub Releases for a newer version.
@@ -18,6 +20,10 @@ struct Config: Codable {
     var checkForUpdates: Bool?
 
     static var fileURL: URL {
+        // Override for running two instances on one Mac (pairing tests).
+        if let dir = ProcessInfo.processInfo.environment["MONNECT_CONFIG_DIR"] {
+            return URL(fileURLWithPath: dir).appendingPathComponent("config.json")
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Monnect/config.json")
     }

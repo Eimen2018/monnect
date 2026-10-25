@@ -36,11 +36,13 @@ final class AppState: ObservableObject {
         peer.startHeartbeat()
         self.peer = peer
 
-        // When this Mac sleeps because the lid was closed, give up the
-        // peripherals: a closed MacBook can't use them, but its Bluetooth
-        // still answers their reconnect pages from sleep, which makes the
-        // other Mac's claim a coin toss. Releasing on clamshell sleep makes
-        // the handoff deterministic. Idle sleep (lid open) is left alone.
+        // When this Mac sleeps because the lid was closed AND the other Mac
+        // is visible on the network, give up the peripherals: a closed
+        // MacBook can't use them, but its Bluetooth still answers their
+        // reconnect pages from sleep, which makes the other Mac's claim a
+        // coin toss. Releasing on clamshell sleep makes the handoff
+        // deterministic. Idle sleep (lid open), or closing the lid with no
+        // peer around, leaves the pairing alone.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -119,11 +121,17 @@ final class AppState: ObservableObject {
 
     private func releaseOnClamshellSleep() {
         guard let config, config.releaseOnLidClose ?? true else { return }
+        // Unpairing is only useful when the other Mac is around to claim.
+        // With no peer on the network, releasing just destroys a pairing
+        // nobody takes over, and reclaiming it on wake needs a fresh pair —
+        // which Magic devices often only accept after a power-cycle. Keeping
+        // the pairing lets macOS reconnect natively on the first key tap.
+        let peerAround = peerVisible
         let devices = config.devices
         Task.detached { [weak self] in
             let lidClosed = Self.isLidClosed()
-            DiagLog.log("EVENT willSleep: lidClosed=\(lidClosed)")
-            guard lidClosed else { return }
+            DiagLog.log("EVENT willSleep: lidClosed=\(lidClosed) peerVisible=\(peerAround)")
+            guard lidClosed, peerAround else { return }
             let held = devices.filter { BluetoothEngine.shared.isConnected($0.address) }
             guard !held.isEmpty else { return }
             BluetoothEngine.shared.releaseAll(held)
