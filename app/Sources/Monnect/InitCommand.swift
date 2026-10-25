@@ -70,7 +70,10 @@ enum InitCommand {
                                                     withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(config).write(to: url)
+            try encoder.encode(config).write(to: url, options: .atomic)
+            // The token lives in here; keep it out of other users' reach.
+            try FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                  ofItemAtPath: url.path)
         } catch {
             err("failed to write config: \(error)")
             return 1

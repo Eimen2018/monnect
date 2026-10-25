@@ -25,6 +25,11 @@ enum PairCommand {
 
         let done = DispatchSemaphore(value: 0)
         var result: Int32 = 1
+        // One confirm evaluation per run, however many connections arrive.
+        // All connection callbacks share the serial `queue`, so a plain var
+        // is enough. Without this, several joiners that said hello could
+        // each get a code guess evaluated before the listener shuts down.
+        var attemptUsed = false
 
         let listener: NWListener
         do {
@@ -48,6 +53,11 @@ enum PairCommand {
                                           salt: salt.base64EncodedString())
                 send(conn, reply) {
                     receiveMessage(conn) { confirm in
+                        guard !attemptUsed else {
+                            send(conn, PairWireReply(ok: false, error: "pairing already attempted")) { conn.cancel() }
+                            return
+                        }
+                        attemptUsed = true
                         guard let confirm, confirm.cmd == "confirm",
                               let macB64 = confirm.mac,
                               let mac = Data(base64Encoded: macB64),
@@ -127,7 +137,9 @@ enum PairCommand {
             code = readLine() ?? ""
         }
         code = code.trimmingCharacters(in: .whitespaces)
-        guard code.count == 6, code.allSatisfy(\.isNumber) else {
+        // ASCII 0-9 only: Character.isNumber also accepts other scripts'
+        // digits, which would derive a different key and burn the attempt.
+        guard code.count == 6, code.allSatisfy({ "0"..."9" ~= $0 }) else {
             err("the code is the six digits shown on the other Mac")
             return 64
         }
@@ -186,7 +198,10 @@ enum PairCommand {
                                                     withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(config).write(to: url)
+            try encoder.encode(config).write(to: url, options: .atomic)
+            // The token lives in here; keep it out of other users' reach.
+            try FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                  ofItemAtPath: url.path)
         } catch {
             err("failed to write config: \(error)")
             return 1
