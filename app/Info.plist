@@ -27,6 +27,7 @@
     <key>NSBonjourServices</key>
     <array>
         <string>_monnect._tcp</string>
+        <string>_monnect-pair._tcp</string>
     </array>
 </dict>
 </plist>
