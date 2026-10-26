@@ -11,9 +11,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.4</string>
+    <string>0.2.0</string>
     <key>CFBundleVersion</key>
-    <string>5</string>
+    <string>6</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
@@ -24,6 +24,17 @@
     <string>Monnect connects and releases your Magic Mouse and Keyboard when switching them between your Macs.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Monnect talks to your other Mac over the local network to hand off your mouse and keyboard.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.aymen.monnect</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>monnect</string>
+            </array>
+        </dict>
+    </array>
     <key>NSBonjourServices</key>
     <array>
         <string>_monnect._tcp</string>

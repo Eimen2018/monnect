@@ -1,5 +1,5 @@
 .DS_Store
-# Personal machine config — never commit
+# Personal config from the old shell scripts — never commit
 config.sh
 # Build artifacts
 app/.build/

@@ -15,159 +15,156 @@ no cable, no KVM, no Universal Control.
 
 Apple's Magic peripherals can only be paired with **one** host at a time.
 If you use the same mouse and keyboard with two Macs (say, a personal and a
-work MacBook), the usual "fix" is plugging in a cable every time you switch,
-because the wired connection re-pairs instantly. monnect replaces that
-ritual with a menu bar app: click **Pull Input Here** on the Mac you want to
-use, give the peripherals a nudge, and they jump over.
+work MacBook), the usual "fix" is plugging in a cable every time you switch.
+monnect replaces that ritual with a menu bar app: click **Pull Input Here**
+on the Mac you want to use, and the devices jump over in a few seconds.
 
 ```
-Mac you're sitting at                    Mac that has the peripherals
-  "Pull Input Here" ── local network ──▶ unpairs the devices
+Mac you're sitting at                    Mac that has the devices
+  "Pull Input Here" ── local network ──▶ unpairs them
   pairs + connects them ◀── devices are now free to switch
 ```
 
-## How it works (the interesting part)
+## Install
 
-Magic devices store exactly **one** pairing — pairing with Mac B invalidates
-Mac A's link key, and a paired device flatly ignores connection attempts
-from any other host (page timeouts, not discoverable). So "keep it paired to
-both and reconnect" is impossible. What *does* work, verified on real
-hardware:
-
-1. The current owner **unpairs** the device (`blueutil --unpair`)
-2. The new owner clears its stale record, then **pairs fresh** — Magic
-   devices pair PIN-less, so this is fully programmatic
-3. The device answers a new host only while **awake** — wiggle the mouse /
-   tap a key during the switch; a power-cycle (off → 3 s → on) is the
-   reliable fallback. The claim loop patiently retries for 90 seconds.
-
-The two Macs coordinate over the local network (Bonjour discovery +
-a token-authenticated TCP message), so neither Mac needs SSH access to the
-other for the app to work.
-
-## Requirements
-
-- Two Macs on the same local network, macOS 14+
-- [blueutil](https://github.com/toy/blueutil): `brew install blueutil`
-- The peripherals paired at least once with each Mac (plug in the cable once
-  per Mac, or pair via Bluetooth settings)
-
-## Install the menu bar app
-
-**Easiest — Homebrew** (installs blueutil too), on **each** Mac:
+On **each** Mac:
 
 ```bash
 brew install --cask eimen2018/tap/monnect
 ```
 
-**Or** download the notarized DMG from
+or download the notarized DMG from
 [Releases](https://github.com/Eimen2018/monnect/releases) and drag
-`Monnect.app` to Applications. It's signed and notarized, so it opens like
-any other app.
+`Monnect.app` to Applications. Nothing else to install.
 
-**Or build from source** on each Mac:
+## Set up
 
-```bash
-git clone https://github.com/Eimen2018/monnect && cd monnect
-./app/make-app.sh
-cp -R app/dist/Monnect.app ~/Applications/
-```
+1. Open Monnect on the Mac your mouse and keyboard work with now. Choose
+   **Set Up My First Mac**, allow Bluetooth, and pick your devices.
+2. It shows a pairing code like `K7QM2-XFD9P`. On the other Mac, open
+   Monnect, choose **Join My Other Mac**, and type the code (case and
+   dashes don't matter). If the second Mac can't find the first (some
+   networks block discovery), type the address shown under the code too.
+3. Allow the **local network** prompt on both Macs, and leave **Open
+   Monnect when I log in** on.
 
-Then run setup on the **first** Mac:
+The second Mac doesn't need the devices paired beforehand.
 
-```bash
-~/Applications/Monnect.app/Contents/MacOS/Monnect init
-```
+**Upgrading from 0.1.x:** install 0.2 on **both** Macs. They keep working
+together without setting up again: each derives its new key from the old
+shared token. That token used to cross the network in cleartext, so
+Settings suggests pairing once more (Settings → Pair Another Mac on one
+Mac, Join on the other) to replace it with a fresh key.
 
-It lists your paired devices and lets you pick the ones to switch. Then
-connect the **second** Mac with a six-digit code: run `Monnect pair` on the
-first Mac, `Monnect join` on the second, and type the code it shows. The
-code is single-use and valid for two minutes; the shared token and device
-list travel encrypted. (The old way still works: `init` also prints a
-`Monnect init --token …` command you can run on the second Mac by hand.)
+## Daily use
 
-Finally, on both Macs: `open ~/Applications/Monnect.app`, approve the
-**Bluetooth**, **local network**, and **firewall** prompts, and add Monnect
-to **System Settings → General → Login Items**.
+Click the keyboard icon in the menu bar → **Pull Input Here**. Devices you
+were just using on the other Mac follow in about 4–5 seconds, no touching
+needed. A device that has gone to sleep needs waking: the menu asks you to
+tap a key or click. A filled icon means the devices are on this Mac. If one
+still won't come, power-cycle it (off, 3 s, on).
 
-> Release builds are signed with a Developer ID and notarized by Apple.
-> Self-built copies are ad-hoc signed, which is fine on the Mac that built
-> them.
-
-### Daily use
-
-Click the keyboard icon in the menu bar of the Mac you want to use →
-**Pull Input Here** → wiggle the mouse and tap a key (or power-cycle stubborn
-devices). Filled icon = peripherals are here. There's also a CLI for
-scripting and hotkey tools:
+You can trigger a switch from anything that can open a URL — Raycast,
+Shortcuts, a hotkey tool:
 
 ```bash
-~/Applications/Monnect.app/Contents/MacOS/Monnect status   # where are they?
-~/Applications/Monnect.app/Contents/MacOS/Monnect pull     # bring them here
-~/Applications/Monnect.app/Contents/MacOS/Monnect release  # let them go
+open -g monnect://pull      # bring the devices here
+open -g monnect://release   # let go of them
 ```
 
-## Alternative: plain shell scripts
+## How it works
 
-Prefer no app? The `*.sh` scripts in the repo root do the same thing over
-SSH instead of Bonjour: `setup.sh` once on each Mac (it writes `config.sh` —
-see `config.example.sh` for the format), then `switch.sh` on whichever Mac
-should have the peripherals. Requirements on both Macs: Remote Login
-enabled, key-based SSH to each other, and Bluetooth permission granted in
-System Settings → Privacy & Security → Bluetooth to your terminal app **and**
-to `/usr/libexec/sshd-keygen-wrapper` (macOS attributes SSH sessions to that
-binary — granting `/usr/sbin/sshd` alone is not enough on recent macOS).
-`raycast-grab-input.sh` wraps `switch.sh` as a Raycast script command.
+Magic devices store exactly **one** pairing, and a paired device ignores
+connection attempts from any other host. So "keep it paired to both and
+reconnect" is impossible. What works:
+
+1. The current owner **unpairs** the devices.
+2. The new owner **pairs fresh** (Magic devices pair without a PIN),
+   giving each device a few seconds to answer before moving to the next.
+   An awake device pairs within a second or two; one that's asleep doesn't
+   answer, and the next device gets its turn instead of waiting out a 15 s
+   page timeout. Measured on two MacBooks (macOS 26 and 27), a switch takes
+   about **4–5 seconds**, without touching the devices.
+3. A device only answers while **awake** — that's the firmware, not
+   something software can change. A device in use on the other Mac *is*
+   awake when it's released, so it comes over on its own; one that has
+   dozed off needs a key tap or a click. The claim retries fast for 90 seconds,
+   then keeps watching with growing pauses, so a device that slept through
+   the switch joins whenever it wakes. The other Mac taking it, or this Mac
+   going to sleep, stops the watch.
+
+The Macs find each other over Bonjour and talk over TLS with a pre-shared
+key (TLS-PSK) that pairing gives both of them. Every message carries each
+Mac's state (awake, which devices it holds, which it's claiming), so either
+side always knows where the devices are. Bluetooth goes through IOBluetooth
+directly: connection changes show up instantly, and nothing polls.
+
+### Lid close
+
+A MacBook that's asleep with the lid closed still answers its devices'
+reconnect attempts, which turns the other Mac's claim into a coin toss.
+So when the lid closing puts a Mac to sleep, Monnect asks the other Mac
+whether it's awake. If it is, this Mac lets go of the devices before
+sleeping (sleep waits briefly while it does). If the other Mac is asleep
+or away, it keeps them, and reopening the lid reconnects natively.
+
+It doesn't let go in clamshell mode with an external display, where the
+keyboard has to stay able to wake the Mac.
+
+While the lid is shut, nothing is ever *claimed*, not even during Power
+Nap wakes. If the other Mac was asleep at lid close but has since been
+woken and is in use, the closed Mac lets go when its next Power Nap wake
+ends, so pulling there goes smoothly.
+
+On wake, it reclaims whatever the other Mac neither holds nor is busy
+claiming. Turn the whole behavior off in Settings.
 
 ## Limitations, honestly
 
-- **The wake-up nudge is part of the ritual.** The device firmware only
-  listens while awake; no software on the Mac side can remove that. Wiggle /
-  tap usually suffices; power-cycle always works. Devices that sleep through
-  a switch aren't stranded — the app keeps watching and pairs them whenever
-  they wake up.
-- Mid-switch, the devices are paired to **neither** Mac. If a switch is
-  interrupted, rerun it — rerunning is always safe. Worst case, one cable
-  plug-in restores the status quo.
-- Both Macs must be awake and on the same network for the handoff message.
-  If the other Mac is unreachable, the claim still runs. To make the
-  laptop-in-a-bag case work, a Mac automatically releases the peripherals
-  when it **sleeps with the lid closed while the other Mac is visible on
-  the network** — a sleeping Mac would otherwise win reconnect races via
-  wake-on-Bluetooth. With no peer around the pairing is kept, so reopening
-  the lid reconnects on the first key tap, no power-cycle needed (set
-  `releaseOnLidClose: false` in the config to never release on lid close).
-- Two Macs per token. More than two would need a smarter "who has them"
-  protocol than this app carries.
+- **Sleeping devices need a nudge.** Devices in use come over by
+  themselves; one that has gone to sleep needs a key tap or a click
+  (the menu says when). A power-cycle always works.
+- Mid-switch, the devices are paired to **neither** Mac. Pulling again is
+  always safe; worst case, one cable plug-in restores things.
+- Both Macs need to be on the same local network for the handoff. If the
+  other Mac can't be reached, the claim still runs.
+- Two Macs per pairing.
 
-## Security notes
+## Security
 
-- The peer protocol is a single "release" command over **plaintext TCP** on
-  your LAN, authenticated by a shared random token (UUID) that lives in
-  `~/Library/Application Support/Monnect/config.json` on both Macs.
-- Someone on your network who captures the token could unpair your
-  peripherals (annoyance, not access). Don't run it on networks you don't
-  trust; rotate the token by re-running `Monnect init` on one Mac and
-  `Monnect pair` / `Monnect join` to carry it to the other.
-- Code pairing (`pair`/`join`) encrypts the token under an X25519 key
-  agreement mixed with the six-digit code (HKDF + AES-GCM). It is not a
-  full PAKE: an active man-in-the-middle on your LAN during the two-minute
-  window could brute-force the code offline. One confirm attempt per code,
-  then the host quits. If that's too spicy for your network, copy the
-  token by hand instead.
-- The app makes no network connections beyond your LAN and collects nothing,
-  with one exception: a daily version check against GitHub Releases (an
-  anonymous HTTPS request; disable with `checkForUpdates: false` in the
-  config).
+- The Macs talk over TLS 1.2 with a pre-shared key: a random 256-bit
+  secret stored in `~/Library/Application Support/Monnect/config.json`
+  (readable only by you). Without it, nobody on your network can read the
+  traffic or make your Mac release its devices.
+- Pairing encrypts that secret under an X25519 key agreement mixed with the
+  pairing code (HKDF + AES-GCM). It isn't a PAKE, so the code is long:
+  50 bits, more than an offline search can cover in the five minutes a
+  code lives. The showing Mac allows five wrong guesses per code, then
+  stops.
+- The only connection beyond your LAN is a daily anonymous version check
+  against GitHub Releases (turn it off in Settings).
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `abort … absence of access to Bluetooth API` (or silently empty output) | The app running blueutil lacks Bluetooth permission. GUI app: approve the prompt. Terminal: add your terminal app in Privacy & Security → Bluetooth. Over SSH: add `/usr/libexec/sshd-keygen-wrapper`. |
-| "Other Mac: not found" in the menu | Both instances running? Same token? Local network permission approved on both? Same Wi-Fi/LAN? |
-| Claim keeps failing | The device wasn't woken inside the 90 s window, or it's out of Bluetooth range. Power-cycle it and pull again. |
-| Devices reconnect to the old Mac by themselves | The old Mac's Monnect isn't running, so nothing unpaired there. Launch it and pull again. |
+| "Other Mac: not found" | Is Monnect running on both? Did you allow **local network** access on both (System Settings → Privacy & Security → Local Network)? Same network? |
+| A device never joins | It's asleep or out of range. Power-cycle it; the app is still watching for it. |
+| Devices drift back to the other Mac | Monnect isn't running there, so nothing let go. Open it and pull again. |
+| Anything else | Settings → **Show Log in Finder** and look at `Monnect.log`. |
+
+## Building from source
+
+```bash
+git clone https://github.com/Eimen2018/monnect && cd monnect/app
+swift test               # unit + two-instance integration tests
+./make-app.sh            # dist/Monnect.app (ad-hoc signed)
+```
+
+`MONNECT_CONFIG_DIR=<dir>` runs an instance with its own config and log;
+add `MONNECT_FAKE_BT=<file>` to use simulated devices shared through that
+file. Two such instances on one Mac can switch fake devices between them
+for real, over the network code.
 
 ## License
 

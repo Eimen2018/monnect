@@ -2,21 +2,67 @@ import Foundation
 import CryptoKit
 
 /// The crypto for code-based pairing: X25519 key agreement, with the
-/// six-digit code mixed into the key derivation, so both sides prove they
+/// pairing code mixed into the key derivation, so both sides prove they
 /// know the code and the joiner receives the config encrypted.
 ///
-/// Scope, honestly: this is not a PAKE. An active man-in-the-middle on the
-/// local network during the two-minute window could brute-force the six
-/// digits offline from a transcript. The window is short, the code is
-/// single-use (one confirm attempt, then the host quits), traffic never
-/// leaves the LAN, and the prize is monnect's token — which lets someone
-/// unpair a mouse. Anyone who wants more can still copy the token by hand
-/// with `Monnect init --token`.
+/// This is not a PAKE (CryptoKit has none), so whoever answers the first
+/// code-dependent message — including a fake host advertising on the LAN —
+/// can try codes offline against it. The code is therefore long: 10
+/// Crockford base-32 characters, 50 bits, which no offline search covers
+/// within the code's five-minute life. Online guessing at the real host is
+/// capped at a few attempts.
 enum PairingCrypto {
-    static let info = "monnect-pair-v1"
+    static let info = "monnect-pair-v2"
+    /// Crockford base-32: no I, L, O, U, so codes read and type cleanly.
+    static let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+    static let codeLength = 10
 
     static func makeCode() -> String {
-        String(format: "%06d", UInt32.random(in: 0..<1_000_000))
+        var rng = SystemRandomNumberGenerator()
+        return String((0..<codeLength).map { _ in alphabet[Int(rng.next(upperBound: UInt32(alphabet.count)))] })
+    }
+
+    /// "k7qm2-xfd9p", "K7QM2 XFD9P", Arabic-Indic digits, O for 0 … → the
+    /// canonical code, or nil if it can't be one.
+    static func normalize(_ input: String) -> String? {
+        var out = ""
+        for ch in input.uppercased() {
+            if ch.isWhitespace || ch == "-" { continue }
+            if let digit = ch.wholeNumberValue, (0...9).contains(digit) {
+                out.append(Character(String(digit)))
+                continue
+            }
+            switch ch {
+            case "O": out.append("0")
+            case "I", "L": out.append("1")
+            default:
+                guard alphabet.contains(ch) else { return nil }
+                out.append(ch)
+            }
+        }
+        return out.count == codeLength ? out : nil
+    }
+
+    /// Formats a code as it's typed: uppercase, digits from any script as
+    /// ASCII, anything else dropped, and the dash put in for you once the
+    /// sixth character arrives (not at five, so backspacing over it works).
+    static func formatTyping(_ input: String) -> String {
+        var chars: [Character] = []
+        for ch in input.uppercased() where chars.count < codeLength {
+            if let digit = ch.wholeNumberValue, (0...9).contains(digit) {
+                chars.append(Character(String(digit)))
+            } else if ch.isASCII, ch.isLetter {
+                chars.append(ch)
+            }
+        }
+        if chars.count > 5 { chars.insert("-", at: 5) }
+        return String(chars)
+    }
+
+    /// "K7QM2XFD9P" → "K7QM2-XFD9P"
+    static func display(_ code: String) -> String {
+        guard code.count == codeLength else { return code }
+        return "\(code.prefix(5))-\(code.suffix(5))"
     }
 
     static func makeSalt() -> Data {
@@ -81,13 +127,13 @@ enum PairingCrypto {
     }
 }
 
-/// Wire messages for pairing, JSON over one TCP connection on the
-/// `_monnect-pair._tcp` service the host advertises while `Monnect pair`
-/// runs. Strict request/reply, so each read is one message:
-///   joiner: hello{pub,name}  → host: {ok,pub,salt}
+/// Wire messages for pairing: length-prefixed JSON frames over one TCP
+/// connection to the `_monnect-pair._tcp` service the host advertises
+/// while its pairing code is showing. Strict request/reply:
+///   joiner: hello{pub,name}  → host: {ok,pub,salt,name}
 ///   joiner: confirm{mac}     → host: {ok,payload} / {ok:false,error}
 struct PairWireMessage: Codable {
-    var v: Int = 1
+    var v: Int = 2
     let cmd: String          // "hello" | "confirm"
     var pub: String? = nil   // b64 X25519 public key (hello)
     var name: String? = nil  // joiner's computer name (hello)
@@ -95,15 +141,18 @@ struct PairWireMessage: Codable {
 }
 
 struct PairWireReply: Codable {
+    static let wrongCode = "wrong code"
     let ok: Bool
     var error: String? = nil
     var pub: String? = nil      // b64 host X25519 public key
     var salt: String? = nil     // b64 16-byte salt
+    var name: String? = nil     // host's computer name
     var payload: String? = nil  // b64 AES-GCM(combined) of PairPayload JSON
 }
 
 /// What pairing hands the joiner: everything the second Mac needs.
 struct PairPayload: Codable {
-    let token: String
+    let key: String
     let devices: [DeviceConfig]
+    let devicesUpdatedAt: Date
 }

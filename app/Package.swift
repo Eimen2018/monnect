@@ -5,6 +5,7 @@ let package = Package(
     name: "Monnect",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Monnect", path: "Sources/Monnect")
+        .executableTarget(name: "Monnect", path: "Sources/Monnect"),
+        .testTarget(name: "MonnectTests", dependencies: ["Monnect"], path: "Tests/MonnectTests"),
     ]
 )
