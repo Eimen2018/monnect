@@ -232,6 +232,46 @@ final class TwoMacTests: XCTestCase {
         XCTAssertEqual(world.owner(of: keyboard.address), "B", "A doesn't grab it back")
     }
 
+    /// IOBluetooth can still call a device connected for a moment after
+    /// -remove. The release reply (and any hello right after) must not
+    /// report it as held, or the pulling Mac's watcher stops waiting for it
+    /// and the device ends up paired to neither Mac (seen 2026-11-05).
+    func testReleaseReplyDoesNotListJustReleasedDevices() async throws {
+        let (a, b, world) = try await makePair()
+        (a.backend as? FakeBluetooth)?.connectedLagAfterUnpair = 1.5
+        world.setOwner("A", of: mouse.address)
+        world.setOwner("A", of: keyboard.address)
+        a.refreshHere()
+
+        let reply = await b.peer?.requestRelease(requestedAt: Date())
+        XCTAssertEqual(reply?.ok, true)
+        XCTAssertEqual(reply?.state.holding, [], "released devices aren't reported as held")
+        let hello = await b.peer?.hello()
+        XCTAssertEqual(hello?.state.holding, [], "nor a moment later")
+        XCTAssertEqual(world.owner(of: mouse.address), "")
+    }
+
+    func testWatcherKeepsWaitingForLaggyReleasedDevices() async throws {
+        let (a, b, world) = try await makePair()
+        (a.backend as? FakeBluetooth)?.connectedLagAfterUnpair = 1.5
+        world.setOwner("A", of: mouse.address)
+        world.setOwner("A", of: keyboard.address)
+        a.refreshHere()
+        // B is watching (devices "asleep" to it) and asks A again after its window.
+        world.setAsleep(true, mouse.address)
+        b.engine.timing.window = 0.2
+        b.engine.timing.peerCheckInterval = 0
+        b.engine.timing.watcherPause = { _ in 0.1 }
+        b.pull()
+        let released = await waitUntil(4) { world.owner(of: self.keyboard.address) == "B" }
+        XCTAssertTrue(released)
+        await Task.sleep(seconds: 0.5)
+        XCTAssertEqual(b.engine.pending, [mouse], "B still waits for the mouse A let go of")
+        world.setAsleep(false, mouse.address)
+        let got = await waitUntil(4) { b.allHere }
+        XCTAssertTrue(got)
+    }
+
     func testDeviceListSyncsToTheOtherMac() async throws {
         let (a, b, _) = try await makePair()
         a.setDevices([mouse])
@@ -308,5 +348,126 @@ final class PairingTests: XCTestCase {
         } catch {
             XCTFail("\(error)")
         }
+    }
+}
+
+/// bluetoothd restarted while the devices weren't paired here: this
+/// process's IOBluetooth state is stale, so Monnect relaunches instead of
+/// pairing (which would fail and crash the daemon again).
+@MainActor
+final class StaleBluetoothTests: XCTestCase {
+    let mouse = FakeWorld.devices[0]
+    let keyboard = FakeWorld.devices[1]
+
+    func testEngineHandsTheClaimToARelaunch() async {
+        let bt = FakeBluetooth(world: FakeWorld(), owner: "me")
+        bt.daemonRestarted = true
+        let engine = SwitchEngine(backend: bt)
+        engine.timing = .fast
+        var handed: ([DeviceConfig], Bool)?
+        engine.onStaleBluetooth = { remaining, inWindow in
+            handed = (remaining, inWindow)
+            return true
+        }
+        engine.claim(FakeWorld.devices, clearStale: []) { nil }
+        let stopped = await waitUntil { handed != nil && engine.activity == .idle }
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(handed?.0, FakeWorld.devices)
+        XCTAssertEqual(handed?.1, true)
+        XCTAssertEqual(bt.attempts, 0, "no pairing attempt with stale Bluetooth state")
+        XCTAssertTrue(engine.pending.isEmpty)
+    }
+
+    func testEngineCarriesOnWhenRelaunchIsRefused() async {
+        let bt = FakeBluetooth(world: FakeWorld(), owner: "me")
+        bt.daemonRestarted = true
+        let engine = SwitchEngine(backend: bt)
+        engine.timing = .fast
+        var asked = 0
+        engine.onStaleBluetooth = { _, _ in asked += 1; return false }
+        engine.claim(FakeWorld.devices, clearStale: []) { nil }
+        let done = await waitUntil { engine.activity == .idle }
+        XCTAssertTrue(done)
+        XCTAssertTrue(bt.isHere(mouse.address) && bt.isHere(keyboard.address))
+        XCTAssertEqual(asked, 1, "asks once per claim, not once per device")
+    }
+
+    func testNoRelaunchWhileTheDaemonIsTheSame() async {
+        let bt = FakeBluetooth(world: FakeWorld(), owner: "me")
+        let engine = SwitchEngine(backend: bt)
+        engine.timing = .fast
+        var asked = false
+        engine.onStaleBluetooth = { _, _ in asked = true; return true }
+        engine.claim(FakeWorld.devices, clearStale: []) { nil }
+        let done = await waitUntil { engine.activity == .idle }
+        XCTAssertTrue(done)
+        XCTAssertFalse(asked)
+        XCTAssertTrue(bt.isHere(mouse.address))
+    }
+
+    func testPullRelaunchesAndTheNewInstanceFinishes() async {
+        let world = FakeWorld()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("monnect-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = Config(key: Config.newKey(), devices: FakeWorld.devices)
+
+        let staleBT = FakeBluetooth(world: world, owner: "me")
+        staleBT.daemonRestarted = true
+        let old = AppModel(backend: staleBT, configURL: dir.appendingPathComponent("config.json"),
+                           startServices: false)
+        old.advertise = false
+        old.engine.timing.pageTimeout = 0.05
+        var resume: Relaunch.Resume?
+        old.relaunch = { resume = $0; return true }
+        old.apply(config)
+        old.engine.claim(config.devices, clearStale: []) { nil }
+        let handed = await waitUntil { resume != nil }
+        XCTAssertTrue(handed)
+        XCTAssertEqual(resume?.devices, FakeWorld.devices.map(\.address))
+        XCTAssertEqual(resume?.watchOnly, false)
+        XCTAssertEqual(staleBT.attempts, 0)
+        old.apply(nil)
+
+        // The relaunched process: fresh Bluetooth state.
+        let fresh = AppModel(backend: FakeBluetooth(world: world, owner: "me"),
+                             configURL: dir.appendingPathComponent("config.json"), startServices: false)
+        fresh.advertise = false
+        fresh.engine.timing.pageTimeout = 0.05
+        fresh.apply(config)
+        defer { fresh.apply(nil) }
+        fresh.resumeAfterRelaunch(resume)
+        let claimed = await waitUntil { fresh.allHere }
+        XCTAssertTrue(claimed)
+    }
+
+    func testResumeFileRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("monnect-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let now = Date()
+        let resume = Relaunch.Resume(devices: [mouse.address], watchOnly: true, at: now)
+        try Relaunch.writeResume(resume, in: dir)
+        XCTAssertEqual(Relaunch.takeResume(in: dir, now: now.addingTimeInterval(2))?.devices, [mouse.address])
+        XCTAssertNil(Relaunch.takeResume(in: dir, now: now), "taking it deletes it")
+
+        try Relaunch.writeResume(resume, in: dir)
+        XCTAssertNil(Relaunch.takeResume(in: dir, now: now.addingTimeInterval(Relaunch.maxResumeAge + 1)),
+                     "an old file is ignored")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: Relaunch.resumeURL(in: dir).path))
+    }
+
+    func testRelaunchIsRateLimited() {
+        let now = Date()
+        XCTAssertTrue(Relaunch.allowed(lastRelaunch: nil, now: now))
+        XCTAssertFalse(Relaunch.allowed(lastRelaunch: now.addingTimeInterval(-60), now: now))
+        XCTAssertTrue(Relaunch.allowed(lastRelaunch: now.addingTimeInterval(-Relaunch.minInterval), now: now))
+        XCTAssertTrue(Relaunch.allowed(lastRelaunch: now.addingTimeInterval(3600), now: now),
+                      "a clock that moved backwards doesn't block relaunches forever")
+    }
+
+    func testFindsTheRealDaemon() {
+        // bluetoothd runs on every Mac with Bluetooth; CI without it just skips.
+        guard let daemon = BluetoothDaemon.current() else { return }
+        XCTAssertGreaterThan(daemon.pid, 0)
+        XCTAssertEqual(BluetoothDaemon.current(), daemon, "same daemon, same identity")
     }
 }

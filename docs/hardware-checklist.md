@@ -37,6 +37,13 @@ Finder); every step below leaves an `EVENT` line there.
 - [ ] Menu shows each device as "here" / "on <other Mac>" correctly, and
       updates instantly when a device connects (no 5 s lag).
 - [ ] `open -g monnect://pull` from Terminal switches too.
+- [ ] Bluetooth service restart (0.2.1): with the devices on the other
+      Mac, quit Monnect, then `open --env MONNECT_SIMULATE_BT_RESTART=1 -a
+      Monnect` and `open -g -a Monnect monnect://pull` (aim the URL at
+      that copy). The log shows `relaunching to refresh Bluetooth state`,
+      then `resuming claim after relaunch`, and both devices connect
+      within a few seconds. No second relaunch, no new
+      `/Library/Logs/DiagnosticReports/bluetoothd-*.ips`.
 
 ## Lid close (MacBook with the devices, other Mac awake)
 

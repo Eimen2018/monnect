@@ -45,6 +45,12 @@ final class SwitchEngine {
     private let backend: BluetoothBackend
     var timing = Timing()
     var onChange: (() -> Void)?
+    /// Called instead of pairing when this process's Bluetooth state is
+    /// stale (bluetoothd restarted while a device wasn't paired here), with
+    /// the devices still wanted and whether the fast window was still open.
+    /// Returns true if it's relaunching Monnect to finish the claim; the
+    /// engine then stops. False: carry on trying as usual.
+    var onStaleBluetooth: ((_ remaining: [DeviceConfig], _ inWindow: Bool) -> Bool)?
 
     private(set) var activity: Activity = .idle {
         didSet { if activity != oldValue { onChange?() } }
@@ -114,6 +120,7 @@ final class SwitchEngine {
         let windowEnd = watchOnly ? started : started.addingTimeInterval(timing.window)
         var lastPeerCheck = Date.distantPast
         var rounds = 0
+        var triedRelaunch = false
 
         while !remaining.isEmpty {
             if Task.isCancelled { return }
@@ -150,6 +157,18 @@ final class SwitchEngine {
             rounds += 1
             for d in remaining {
                 if Task.isCancelled { return }
+                if !triedRelaunch, let onStale = onStaleBluetooth, backend.daemonRestarted,
+                   !backend.isPaired(d.address) {
+                    triedRelaunch = true
+                    DiagLog.log("EVENT Bluetooth service restarted since launch; [\(names(remaining))] need a fresh process")
+                    if onStale(remaining, Date() < windowEnd) {
+                        pending = []
+                        activity = .idle
+                        task = nil
+                        return
+                    }
+                    // Relaunch not possible: try anyway.
+                }
                 let outcome = await backend.attemptClaim(d.address, pageTimeout: timing.pageTimeout)
                 if Task.isCancelled { return }
                 switch outcome {

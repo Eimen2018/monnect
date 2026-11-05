@@ -39,9 +39,17 @@ final class AppModel: ObservableObject {
     /// release, sleep, a new config). An async step that wakes up to a
     /// different epoch drops what it was about to do.
     private var epoch = 0
+    /// Devices we're letting go of for the other Mac, or let go of moments
+    /// ago. IOBluetooth can still call them connected for a little while
+    /// after unpairing; telling the other Mac we hold them would make it
+    /// stop waiting for them, and they'd end up paired to neither Mac.
+    private var releasedAt: [String: Date] = [:]
+    static let releaseSettleTime: TimeInterval = 5
     private var timers: [Timer] = []
     /// Bonjour on/off; tests connect two instances by address instead.
     var advertise = true
+    /// Restarts Monnect to finish a claim; tests stub it.
+    var relaunch: (Relaunch.Resume) -> Bool = { Relaunch.perform($0) }
 
     /// Where this instance keeps its config. Tests pass a temp file.
     let configURL: URL
@@ -51,6 +59,11 @@ final class AppModel: ObservableObject {
         self.backend = backend ?? makeBluetoothBackend()
         engine = SwitchEngine(backend: self.backend)
         engine.onChange = { [weak self] in self?.engineChanged() }
+        engine.onStaleBluetooth = { [weak self] remaining, inWindow in
+            guard let self else { return false }
+            return self.relaunch(Relaunch.Resume(devices: remaining.map(\.address),
+                                                 watchOnly: !inWindow, at: Date()))
+        }
         self.backend.onConnectionChange = { [weak self] in self?.refreshHere() }
         guard startServices else { return }
 
@@ -62,6 +75,7 @@ final class AppModel: ObservableObject {
         power.start()
 
         apply(ConfigStore.load(from: configURL))
+        resumeAfterRelaunch(Relaunch.takeResume(in: configURL.deletingLastPathComponent()))
         timers = [
             Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.tick() }
@@ -217,10 +231,15 @@ final class AppModel: ObservableObject {
     private func currentState() -> PeerState {
         PeerState(name: computerName,
                   awake: !isAsleep,
-                  holding: config?.devices.map(\.address).filter { backend.isHere($0) } ?? [],
+                  holding: config?.devices.map(\.address).filter { backend.isHere($0) && !justReleased($0) } ?? [],
                   claiming: engine.pending.map(\.address),
                   devices: config?.devices ?? [],
                   devicesUpdatedAt: config?.devicesUpdatedAt ?? .distantPast)
+    }
+
+    private func justReleased(_ address: String) -> Bool {
+        guard let at = releasedAt[address] else { return false }
+        return Date().timeIntervalSince(at) < Self.releaseSettleTime
     }
 
     private func engineChanged() {
@@ -267,6 +286,7 @@ final class AppModel: ObservableObject {
         let myEpoch = epoch
         releasedOnSleep = false
         suspendedClaim = []
+        releasedAt = [:]
         // What the other Mac last told us it had, before it lets go.
         let peerHadBefore = peer.peer.map { Set($0.state.holding) }
         let peerSaidAsleep = peer.peer?.state.awake == false
@@ -309,6 +329,18 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Picks up the claim the previous instance handed over when it
+    /// relaunched for fresh Bluetooth state.
+    func resumeAfterRelaunch(_ resume: Relaunch.Resume?) {
+        guard let resume, let config else { return }
+        let wanted = config.devices.filter { resume.devices.contains($0.address) }
+        guard !wanted.isEmpty else { return }
+        DiagLog.log("EVENT resuming claim after relaunch: [\(wanted.map(\.name).joined(separator: ", "))]")
+        engine.claim(wanted, clearStale: [], watchOnly: resume.watchOnly) {
+            await self.peerHolding()
+        }
+    }
+
     func stopWaiting() {
         DiagLog.log("EVENT user stopped waiting")
         engine.cancel()
@@ -346,7 +378,16 @@ final class AppModel: ObservableObject {
         // unpairing — otherwise it could finish after we answered "ok".
         await engine.cancelAndWait()
         if let config {
-            for d in config.devices { await backend.unpair(d.address) }
+            // Marked before unpairing, so a hello answered mid-release
+            // doesn't report them either.
+            for d in config.devices where backend.isPaired(d.address) { releasedAt[d.address] = Date() }
+            for d in config.devices where releasedAt[d.address] != nil {
+                if await backend.unpair(d.address) {
+                    releasedAt[d.address] = Date()
+                } else {
+                    releasedAt[d.address] = nil   // still ours: say so
+                }
+            }
         }
         refreshHere()
         return PeerResponse(ok: true, from: peer?.machineID ?? "", state: currentState())

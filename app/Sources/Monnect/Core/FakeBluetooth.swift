@@ -77,6 +77,12 @@ final class FakeBluetooth: BluetoothBackend {
     var attempts = 0
     /// How long one claim attempt takes (a page or pairing in flight).
     var latency: TimeInterval = 0.05
+    /// Tests flip this to act out a bluetoothd restart.
+    var daemonRestarted = false
+    /// Real IOBluetooth can still report a device as connected for a
+    /// moment after -remove; this long, a released device still looks here.
+    var connectedLagAfterUnpair: TimeInterval = 0
+    private var lingering: [String: Date] = [:]
 
     init(world: FakeWorld, owner: String) {
         self.world = world
@@ -89,13 +95,21 @@ final class FakeBluetooth: BluetoothBackend {
 
     func isPaired(_ address: String) -> Bool { world.owner(of: address) == owner }
 
-    func isHere(_ address: String) -> Bool { isPaired(address) }
+    func isHere(_ address: String) -> Bool {
+        if let until = lingering[address], Date() < until { return true }
+        return isPaired(address)
+    }
 
-    func unpair(_ address: String) async {
-        guard isPaired(address) else { return }
+    @discardableResult
+    func unpair(_ address: String) async -> Bool {
+        guard isPaired(address) else { return true }
         world.setOwner("", of: address)
+        if connectedLagAfterUnpair > 0 {
+            lingering[address] = Date().addingTimeInterval(connectedLagAfterUnpair)
+        }
         DiagLog.log("fake unpair \(address)")
         onConnectionChange?()
+        return true
     }
 
     func attemptClaim(_ address: String, pageTimeout: TimeInterval) async -> ClaimOutcome {

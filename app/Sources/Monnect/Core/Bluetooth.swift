@@ -16,7 +16,13 @@ protocol BluetoothBackend: AnyObject {
     func isPaired(_ address: String) -> Bool
     /// Paired with this Mac and connected right now.
     func isHere(_ address: String) -> Bool
-    func unpair(_ address: String) async
+    /// True once the device is no longer paired here (or never was).
+    @discardableResult
+    func unpair(_ address: String) async -> Bool
+    /// bluetoothd has restarted since this process started using Bluetooth,
+    /// so pairing a device that isn't paired here would fail (and crash the
+    /// daemon again) until Monnect relaunches. See BluetoothDaemon.
+    var daemonRestarted: Bool { get }
     /// One quick attempt to take the device: page it, pair, connect.
     func attemptClaim(_ address: String, pageTimeout: TimeInterval) async -> ClaimOutcome
 }
@@ -53,6 +59,19 @@ final class IOBluetoothBackend: NSObject, BluetoothBackend {
     /// a little after their callback (a late callback after stop() must
     /// never reach a freed object).
     private var inFlight: Set<NSObject> = []
+
+    /// The daemon this process's IOBluetooth state belongs to. Captured
+    /// before the first IOBluetooth call.
+    private let daemonAtLaunch = BluetoothDaemon.current()
+
+    var daemonRestarted: Bool {
+        // Hardware test hook: `open --env MONNECT_SIMULATE_BT_RESTART=1 -a Monnect`
+        // acts out a restart without killing bluetoothd (which needs root).
+        // The relaunched instance doesn't inherit it.
+        if ProcessInfo.processInfo.environment["MONNECT_SIMULATE_BT_RESTART"] == "1" { return true }
+        guard let daemonAtLaunch, let now = BluetoothDaemon.current() else { return false }
+        return now != daemonAtLaunch
+    }
 
     func start() {
         guard connectNotification == nil else { return }
@@ -112,20 +131,23 @@ final class IOBluetoothBackend: NSObject, BluetoothBackend {
         return d.isPaired() && d.isConnected()
     }
 
-    func unpair(_ address: String) async {
-        guard let d = device(address), d.isPaired() else { return }
+    @discardableResult
+    func unpair(_ address: String) async -> Bool {
+        guard let d = device(address), d.isPaired() else { return true }
         // There's no public unpair API. -remove is what System Settings'
         // "Forget This Device" and blueutil use; fine outside the App Store.
         let remove = NSSelectorFromString("remove")
         guard d.responds(to: remove) else {
             DiagLog.log("unpair \(address): -remove unavailable on this macOS")
-            return
+            return false
         }
         d.perform(remove)
         for _ in 0..<30 where d.isPaired() {
             await Task.sleep(seconds: 0.1)
         }
-        DiagLog.log("unpair \(address) -> \(d.isPaired() ? "still paired" : "ok")")
+        let gone = !d.isPaired()
+        DiagLog.log("unpair \(address) -> \(gone ? "ok" : "still paired")")
+        return gone
     }
 
     func attemptClaim(_ address: String, pageTimeout: TimeInterval) async -> ClaimOutcome {
