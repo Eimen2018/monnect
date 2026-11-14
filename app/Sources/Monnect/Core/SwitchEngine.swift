@@ -45,12 +45,20 @@ final class SwitchEngine {
     private let backend: BluetoothBackend
     var timing = Timing()
     var onChange: (() -> Void)?
-    /// Called instead of pairing when this process's Bluetooth state is
-    /// stale (bluetoothd restarted while a device wasn't paired here), with
-    /// the devices still wanted and whether the fast window was still open.
-    /// Returns true if it's relaunching Monnect to finish the claim; the
-    /// engine then stops. False: carry on trying as usual.
+    /// Called instead of pairing when this process's Bluetooth state may be
+    /// stale, with the devices still wanted and whether the fast window was
+    /// still open. Returns true if it's relaunching Monnect to finish the
+    /// claim; the engine then stops. False: carry on trying as usual.
+    ///
+    /// Two cases: bluetoothd restarted since launch (then any round), or
+    /// the process isn't fresh (checked on a claim's first round only, so a
+    /// long watch in a relaunched process doesn't relaunch again). Either
+    /// way only for devices that aren't paired here: paired ones keep a
+    /// record the daemon never loses.
     var onStaleBluetooth: ((_ remaining: [DeviceConfig], _ inWindow: Bool) -> Bool)?
+    /// False once this process has been running long enough that its
+    /// IOBluetooth view of unpaired devices can't be trusted.
+    var isFreshProcess: () -> Bool = { true }
 
     private(set) var activity: Activity = .idle {
         didSet { if activity != oldValue { onChange?() } }
@@ -157,10 +165,11 @@ final class SwitchEngine {
             rounds += 1
             for d in remaining {
                 if Task.isCancelled { return }
-                if !triedRelaunch, let onStale = onStaleBluetooth, backend.daemonRestarted,
-                   !backend.isPaired(d.address) {
+                if !triedRelaunch, let onStale = onStaleBluetooth, !backend.isPaired(d.address),
+                   let why = backend.daemonRestarted ? "Bluetooth service restarted since launch"
+                       : rounds == 1 && !isFreshProcess() ? "Monnect has been running a while" : nil {
                     triedRelaunch = true
-                    DiagLog.log("EVENT Bluetooth service restarted since launch; [\(names(remaining))] need a fresh process")
+                    DiagLog.log("EVENT \(why); [\(names(remaining))] need a fresh process")
                     if onStale(remaining, Date() < windowEnd) {
                         pending = []
                         activity = .idle

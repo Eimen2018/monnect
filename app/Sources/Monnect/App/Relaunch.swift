@@ -16,6 +16,12 @@ enum Relaunch {
     /// At most one relaunch per this long, so a daemon that keeps
     /// crashing can't put Monnect in a restart loop.
     static let minInterval: TimeInterval = 600
+    /// A process younger than this pairs devices itself; an older one
+    /// relaunches first. bluetoothd can forget a device that isn't paired
+    /// here while it stays unpaired (seen after ~43 h, with no daemon
+    /// restart), and IOBluetooth in an old process then pairs the empty
+    /// address. A fresh process always gets it right.
+    static let freshFor: TimeInterval = 60
 
     static func resumeURL(in directory: URL = ConfigStore.directory) -> URL {
         directory.appendingPathComponent("resume.json")

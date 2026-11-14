@@ -50,6 +50,9 @@ final class AppModel: ObservableObject {
     var advertise = true
     /// Restarts Monnect to finish a claim; tests stub it.
     var relaunch: (Relaunch.Resume) -> Bool = { Relaunch.perform($0) }
+    /// When this instance started; claims from an older process relaunch
+    /// first (see SwitchEngine.isFreshProcess). Tests move it back.
+    var launchedAt = Date()
 
     /// Where this instance keeps its config. Tests pass a temp file.
     let configURL: URL
@@ -63,6 +66,10 @@ final class AppModel: ObservableObject {
             guard let self else { return false }
             return self.relaunch(Relaunch.Resume(devices: remaining.map(\.address),
                                                  watchOnly: !inWindow, at: Date()))
+        }
+        engine.isFreshProcess = { [weak self] in
+            guard let self else { return true }
+            return Date().timeIntervalSince(self.launchedAt) < Relaunch.freshFor
         }
         self.backend.onConnectionChange = { [weak self] in self?.refreshHere() }
         guard startServices else { return }

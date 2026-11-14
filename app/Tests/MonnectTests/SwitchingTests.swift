@@ -405,6 +405,85 @@ final class StaleBluetoothTests: XCTestCase {
         XCTAssertTrue(bt.isHere(mouse.address))
     }
 
+    func testOldProcessRelaunchesBeforePairing() async {
+        // Seen 2026-11-14: bluetoothd forgot the unpaired devices with no
+        // restart, so only the process's age gives it away.
+        let bt = FakeBluetooth(world: FakeWorld(), owner: "me")
+        let engine = SwitchEngine(backend: bt)
+        engine.timing = .fast
+        engine.isFreshProcess = { false }
+        var handed: ([DeviceConfig], Bool)?
+        engine.onStaleBluetooth = { remaining, inWindow in
+            handed = (remaining, inWindow)
+            return true
+        }
+        engine.claim(FakeWorld.devices, clearStale: []) { nil }
+        let stopped = await waitUntil { handed != nil && engine.activity == .idle }
+        XCTAssertTrue(stopped)
+        XCTAssertEqual(handed?.0, FakeWorld.devices)
+        XCTAssertEqual(handed?.1, true)
+        XCTAssertEqual(bt.attempts, 0)
+    }
+
+    func testOldProcessCarriesOnWhenRelaunchIsRefused() async {
+        let bt = FakeBluetooth(world: FakeWorld(), owner: "me")
+        let engine = SwitchEngine(backend: bt)
+        engine.timing = .fast
+        engine.isFreshProcess = { false }
+        var asked = 0
+        engine.onStaleBluetooth = { _, _ in asked += 1; return false }
+        engine.claim(FakeWorld.devices, clearStale: []) { nil }
+        let done = await waitUntil { engine.activity == .idle }
+        XCTAssertTrue(done)
+        XCTAssertTrue(bt.isHere(mouse.address) && bt.isHere(keyboard.address))
+        XCTAssertEqual(asked, 1)
+    }
+
+    func testLongWatchInAFreshProcessDoesNotRelaunch() async {
+        // A relaunched instance resumes the watch; growing old while it
+        // waits for a sleeping device mustn't relaunch it again.
+        let world = FakeWorld()
+        world.setAsleep(true, mouse.address)
+        let bt = FakeBluetooth(world: world, owner: "me")
+        let engine = SwitchEngine(backend: bt)
+        engine.timing = .fast
+        var fresh = true
+        engine.isFreshProcess = { fresh }
+        var asked = false
+        engine.onStaleBluetooth = { _, _ in asked = true; return true }
+        engine.claim([mouse], clearStale: [], watchOnly: true) { nil }
+        let tried = await waitUntil { bt.attempts >= 1 }
+        XCTAssertTrue(tried)
+        fresh = false
+        let more = await waitUntil { bt.attempts >= 3 }
+        XCTAssertTrue(more)
+        world.setAsleep(false, mouse.address)
+        let done = await waitUntil { bt.isHere(self.mouse.address) }
+        XCTAssertTrue(done)
+        XCTAssertFalse(asked)
+    }
+
+    func testPullFromALongRunningInstanceRelaunches() async {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("monnect-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = Config(key: Config.newKey(), devices: FakeWorld.devices)
+        let bt = FakeBluetooth(world: FakeWorld(), owner: "me")
+        let model = AppModel(backend: bt, configURL: dir.appendingPathComponent("config.json"),
+                             startServices: false)
+        model.advertise = false
+        model.engine.timing.pageTimeout = 0.05
+        model.launchedAt = Date().addingTimeInterval(-43 * 3600)
+        var resume: Relaunch.Resume?
+        model.relaunch = { resume = $0; return true }
+        model.apply(config)
+        defer { model.apply(nil) }
+        model.engine.claim(config.devices, clearStale: []) { nil }
+        let handed = await waitUntil { resume != nil }
+        XCTAssertTrue(handed)
+        XCTAssertEqual(resume?.devices, FakeWorld.devices.map(\.address))
+        XCTAssertEqual(bt.attempts, 0)
+    }
+
     func testPullRelaunchesAndTheNewInstanceFinishes() async {
         let world = FakeWorld()
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("monnect-\(UUID().uuidString)")

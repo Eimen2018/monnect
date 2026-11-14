@@ -45,6 +45,12 @@ Finder); every step below leaves an `EVENT` line there.
       within a few seconds. No second relaunch, no new
       `/Library/Logs/DiagnosticReports/bluetoothd-*.ips`.
 
+- [ ] Long-running instance (0.2.2): with Monnect running for over a
+      minute and not relaunched in the last 10 min, pull. The log shows
+      `Monnect has been running a while; … need a fresh process`, then
+      `relaunching to refresh Bluetooth state` and `resuming claim after
+      relaunch`, and both devices connect within ~5 s of the pull.
+
 ## Lid close (MacBook with the devices, other Mac awake)
 
 - [ ] Close the lid. Log: `willSleep: lid closed, other Mac awake` then
